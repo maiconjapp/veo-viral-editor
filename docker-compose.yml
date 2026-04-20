@@ -1,0 +1,38 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MONGO_URL: "mongodb://mongo:27017"
+      DB_NAME: "${DB_NAME:-viral_editor}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+    depends_on:
+      - mongo
+    volumes:
+      - backend_storage:/app/storage
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        REACT_APP_BACKEND_URL: ""
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  mongo_data:
+  backend_storage:
