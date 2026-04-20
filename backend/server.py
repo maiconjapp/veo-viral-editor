@@ -218,7 +218,10 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def on_start():
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
-    await db.projects.create_index("id", unique=True)
+    try:
+        await db.projects.create_index("id", unique=True)
+    except Exception as e:
+        logging.warning(f"MongoDB startup index creation failed: {e}")
 
 
 @app.on_event("shutdown")
