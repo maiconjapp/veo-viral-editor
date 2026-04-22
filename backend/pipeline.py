@@ -29,7 +29,7 @@ def _key():
 # Configure Gemini
 genai.configure(api_key=_key())
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
 STORAGE_ROOT = Path(__file__).parent / "storage" / "projects"
 
 
