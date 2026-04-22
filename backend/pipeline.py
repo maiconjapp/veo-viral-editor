@@ -31,7 +31,41 @@ def _client():
     return genai.Client(api_key=_key())
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_FALLBACK_MODELS = [
+    m.strip() for m in os.environ.get(
+        "GEMINI_FALLBACK_MODELS",
+        "gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite",
+    ).split(",") if m.strip()
+]
 STORAGE_ROOT = Path(__file__).parent / "storage" / "projects"
+
+
+def _generate_with_retry(client, contents, system_instruction, max_attempts: int = 5):
+    """Call Gemini generate_content with backoff on 503/429/500 and model fallback."""
+    models_to_try = [GEMINI_MODEL] + [m for m in GEMINI_FALLBACK_MODELS if m != GEMINI_MODEL]
+    last_err = None
+    for model in models_to_try:
+        for attempt in range(max_attempts):
+            try:
+                return client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                    ),
+                )
+            except Exception as e:
+                msg = str(e)
+                last_err = e
+                retriable = any(code in msg for code in ("503", "429", "500", "UNAVAILABLE", "RESOURCE_EXHAUSTED"))
+                if not retriable:
+                    raise
+                if attempt < max_attempts - 1:
+                    wait = min(2 ** attempt, 20)
+                    time.sleep(wait)
+                    continue
+                break  # try next model
+    raise last_err if last_err else RuntimeError("Gemini generate_content failed")
 
 
 # --------------------------- helpers ---------------------------
@@ -122,12 +156,10 @@ async def analyze_clip(clip_idx: int, path: str, user_prompt: str) -> dict:
         "- Aim for 6-14 distinct scenes."
     )
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
+    response = _generate_with_retry(
+        client,
         contents=[video_file, question],
-        config=genai_types.GenerateContentConfig(
-            system_instruction=ANALYSIS_SYSTEM,
-        ),
+        system_instruction=ANALYSIS_SYSTEM,
     )
 
     # Clean up file from Gemini storage
@@ -198,12 +230,10 @@ async def build_plan(
             "- vo_script word count should be pacing-matched (~2.3 words/sec English, ~2.1 PT/ES)."
         )
 
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
+        response = _generate_with_retry(
+            client,
             contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=PLANNING_SYSTEM,
-            ),
+            system_instruction=PLANNING_SYSTEM,
         )
         return _parse_json(response.text)
 
