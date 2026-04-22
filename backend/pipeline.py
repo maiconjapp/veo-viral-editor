@@ -21,15 +21,16 @@ from pathlib import Path
 from typing import Any
 
 import edge_tts
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 
 def _key():
     return os.environ.get("GOOGLE_API_KEY", "")
 
-# Configure Gemini
-genai.configure(api_key=_key())
+def _client():
+    return genai.Client(api_key=_key())
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash-latest")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 STORAGE_ROOT = Path(__file__).parent / "storage" / "projects"
 
 
@@ -80,19 +81,22 @@ ANALYSIS_SYSTEM = (
 
 
 async def analyze_clip(clip_idx: int, path: str, user_prompt: str) -> dict:
-    model = genai.GenerativeModel(
-        model_name=GEMINI_MODEL,
-        system_instruction=ANALYSIS_SYSTEM
-    )
+    client = _client()
 
     # Upload video
-    video_file = genai.upload_file(path=path, display_name=f"clip-{clip_idx}")
-    
+    video_file = client.files.upload(
+        file=path,
+        config=genai_types.UploadFileConfig(
+            display_name=f"clip-{clip_idx}",
+            mime_type="video/mp4",
+        ),
+    )
+
     # Wait for processing
     while video_file.state.name == "PROCESSING":
         time.sleep(2)
-        video_file = genai.get_file(video_file.name)
-    
+        video_file = client.files.get(name=video_file.name)
+
     if video_file.state.name == "FAILED":
         raise RuntimeError(f"Video processing failed for {path}")
 
@@ -118,11 +122,17 @@ async def analyze_clip(clip_idx: int, path: str, user_prompt: str) -> dict:
         "- Aim for 6-14 distinct scenes."
     )
 
-    response = model.generate_content([video_file, question])
-    
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[video_file, question],
+        config=genai_types.GenerateContentConfig(
+            system_instruction=ANALYSIS_SYSTEM,
+        ),
+    )
+
     # Clean up file from Gemini storage
-    genai.delete_file(video_file.name)
-    
+    client.files.delete(name=video_file.name)
+
     return _parse_json(response.text)
 
 
@@ -153,10 +163,7 @@ async def build_plan(
         min_dur = max(20.0, total_available - 3)
 
     async def _ask(extra: str = "") -> dict:
-        model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL,
-            system_instruction=PLANNING_SYSTEM
-        )
+        client = _client()
 
         prompt = (
             f"Assemble a viral video edit plan for a {audience} audience.\n"
@@ -191,7 +198,13 @@ async def build_plan(
             "- vo_script word count should be pacing-matched (~2.3 words/sec English, ~2.1 PT/ES)."
         )
 
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=PLANNING_SYSTEM,
+            ),
+        )
         return _parse_json(response.text)
 
     plan = await _ask()
